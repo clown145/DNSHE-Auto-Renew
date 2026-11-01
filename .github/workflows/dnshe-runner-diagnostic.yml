@@ -7,11 +7,21 @@ permissions:
   contents: read
 
 jobs:
-  runner-diagnostic:
+  renew:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: Confirm runner starts
-        run: |
-          echo 'Read-only runner diagnostic; no domain API calls'
-          date -u
+      - name: Confirm renewal job scheduling only
+        run: echo 'Diagnostic only; no domain API or SMTP calls'
+  keepalive:
+    if: github.event_name == 'schedule' || github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    concurrency:
+      group: dnshe-diagnostic-monthly-keepalive
+      cancel-in-progress: false
+    steps:
+      - name: Confirm keepalive job scheduling only
+        run: echo 'Diagnostic only; no repository modifications'
