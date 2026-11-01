@@ -8,6 +8,9 @@ on:
     - cron: '0 0 1 * *'
   workflow_dispatch: # 依然保留手动触发按钮，方便测试
 
+permissions:
+  contents: read
+
 jobs:
   renew:
     runs-on: ubuntu-latest
@@ -18,7 +21,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.12'
 
       - name: Install dependencies
         run: pip install requests
@@ -37,3 +40,35 @@ jobs:
           SMTP_USE_SSL: ${{ secrets.SMTP_USE_SSL }}
           SMTP_USE_STARTTLS: ${{ secrets.SMTP_USE_STARTTLS }}
         run: python renew_domains.py
+
+
+  # 独立于续期任务：Python/API/邮件失败不会阻止每月保活。
+  keepalive:
+    if: github.event_name == 'schedule' || github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: dnshe-monthly-keepalive
+      cancel-in-progress: false
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Record monthly workflow heartbeat
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          mkdir -p .github
+          printf 'Last workflow heartbeat (UTC month): %s\n' "$(date -u +%Y-%m)" > .github/heartbeat.txt
+          git add .github/heartbeat.txt
+          if git diff --cached --quiet; then
+            echo "Heartbeat already recorded this month"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: record monthly workflow heartbeat"
+          git pull --rebase origin "$DEFAULT_BRANCH"
+          git push origin "HEAD:$DEFAULT_BRANCH"

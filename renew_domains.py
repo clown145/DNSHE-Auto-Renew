@@ -2,6 +2,7 @@ import requests
 import os
 import smtplib
 import ssl
+import sys
 from datetime import datetime
 from email.message import EmailMessage
 
@@ -34,17 +35,21 @@ def _get_bool_env(name, default):
 
 
 def send_smtp(content):
-    if not SMTP_HOST or not SMTP_TO:
+    if not SMTP_HOST and not SMTP_TO:
         print("未配置 SMTP_HOST 或 SMTP_TO，跳过邮件推送")
-        return
+        return True
+
+    if not SMTP_HOST or not SMTP_TO:
+        print("SMTP_HOST 和 SMTP_TO 必须同时配置")
+        return False
 
     recipients = [address.strip() for address in SMTP_TO.split(',') if address.strip()]
     if not recipients:
-        print("SMTP_TO 未包含有效的收件人，跳过邮件推送")
-        return
+        print("SMTP_TO 未包含有效的收件人")
+        return False
     if not SMTP_FROM:
-        print("未配置 SMTP_FROM 或 SMTP_USER，跳过邮件推送")
-        return
+        print("未配置 SMTP_FROM 或 SMTP_USER")
+        return False
 
     try:
         port = int(SMTP_PORT)
@@ -69,10 +74,16 @@ def send_smtp(content):
                 server.login(SMTP_USER, SMTP_PASSWORD)
             server.send_message(message, from_addr=SMTP_FROM, to_addrs=recipients)
         print("SMTP 邮件推送成功")
+        return True
     except Exception as e:
         print(f"SMTP 邮件推送失败: {str(e)}")
+        return False
 
 def main():
+    if not API_KEY or not API_SECRET:
+        print("缺少 DNSHE_API_KEY 或 DNSHE_API_SECRET")
+        return 1
+
     headers = {
         "X-API-Key": API_KEY,
         "X-API-Secret": API_SECRET,
@@ -82,12 +93,20 @@ def main():
     # 1. 获取所有子域名（显式请求到期时间字段）
     list_url = f"{BASE_URL}&endpoint=subdomains&action=list&fields=id,subdomain,rootdomain,full_domain,status,expires_at,never_expires"
     try:
-        resp = requests.get(list_url, headers=headers)
-        subdomains = resp.json().get('subdomains', [])
+        resp = requests.get(list_url, headers=headers, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        if not isinstance(data, dict) or data.get('success') is False:
+            raise ValueError("域名列表 API 返回失败或无效响应")
+        subdomains = data.get('subdomains')
+        if not isinstance(subdomains, list):
+            raise ValueError("域名列表响应缺少有效 subdomains 列表")
     except Exception as e:
+        print(f"获取域名列表失败: {str(e)}")
         send_smtp(f"获取域名列表失败: {str(e)}")
-        return
+        return 1
 
+    failed = False
     today = datetime.now()
     renewal_results = []  # 第一段：本次续期结果
     expiry_info = []      # 第二段：所有域名到期时间
@@ -129,15 +148,19 @@ def main():
         payload = {"subdomain_id": domain_id}
 
         try:
-            r_resp = requests.post(renew_url, headers=headers, json=payload).json()
+            response = requests.post(renew_url, headers=headers, json=payload, timeout=30)
+            response.raise_for_status()
+            r_resp = response.json()
             if r_resp.get('success'):
                 new_expiry = r_resp.get('new_expires_at', '未知')
                 charged = r_resp.get('charged_amount', 0)
                 renewal_results.append(f"✅ {full_domain}: 续期成功 (新到期: {new_expiry}, 消耗: {charged}积分)")
             else:
+                failed = True
                 msg = r_resp.get('message', '未知错误')
                 renewal_results.append(f"❌ {full_domain}: 续期失败 ({msg})")
         except Exception as e:
+            failed = True
             renewal_results.append(f"❌ {full_domain}: 请求异常 ({str(e)})")
 
     # 3. 构建两段式通知消息
@@ -154,7 +177,9 @@ def main():
 
     message = "\n".join(message_parts)
     print(message)
-    send_smtp(message)
+    notification_ok = send_smtp(message)
+    return 1 if failed or not notification_ok else 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
+
