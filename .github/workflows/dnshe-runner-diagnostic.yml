@@ -1,0 +1,17 @@
+name: DNSHE Runner Diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runner-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Confirm runner starts
+        run: |
+          echo 'Read-only runner diagnostic; no domain API calls'
+          date -u
